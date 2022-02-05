@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Feb  2 22:28:26 2022
+
+@author: kunyu
+"""
+
+import numpy as np,numpy.linalg
+from timeit import timeit
+import functools
+import time
+
+def near_psd(a,epsilon = 1e-3):
+    n = a.shape[0]
+    invSD = None
+    out = a.copy()
+    
+    invSD = np.matrix(np.diag(1.0/np.sqrt(np.diag(out))))
+    out = invSD * out * invSD
+    
+    vals,vecs = np.linalg.eig(out)
+    vals = np.maximum(vals,epsilon)
+    vals = vals.reshape(n,1)
+    t = 1.0/(vecs * vecs * vals)
+    t = t.tolist()
+    T = np.identity(n)
+    for i in range(n):
+        T[i,i] = np.sqrt(t[i][0])
+    l = np.identity(n)
+    vals = vals.tolist()
+    for i in range(n):
+        l[i,i] = np.sqrt(vals[i][0])
+    
+    B = T * vecs * l
+    out = B * B.T
+    
+    if invSD is not None:
+        invSD = np.diag(1.0/np.diag(invSD))
+        out = invSD * out * invSD
+        
+    return out
+
+def chol_psd(a):
+    a = np.array(a,float)
+    L = np.zeros_like(a)
+    n,_ = np.shape(a)
+    for j in range(n):
+        for i in range(j,n):
+            if i == j:
+                L[i,j] = np.sqrt(a[i,j] - np.sum(L[i,:j]**2))
+            else:
+                    L[i,j] = (a[i,j]-np.sum(L[i,:j]*L[j,:j]))/L[j,j]
+    return L
+
+#Implement Higham’s 2002 nearest psd correlation function
+def _getAplus(A):
+    eigval, eigvec = np.linalg.eig(A)
+    Q = np.matrix(eigvec)
+    xdiag = np.matrix(np.diag(np.maximum(eigval, 0)))
+    return Q*xdiag*Q.T
+
+def _getPs(A, W=None):
+    W05 = np.matrix(W**.5)
+    return  W05.I * _getAplus(W05 * A * W05) * W05.I
+
+def _getPu(A, W=None):
+    Aret = np.array(A.copy())
+    Aret[W > 0] = np.array(W)[W > 0]
+    return np.matrix(Aret)
+
+def wgtNorm(A,W):
+    W05 = np.sqrt(W)
+    W05 = W05 * A * W05
+    return np.sum(W05 * W05)
+
+
+def higham_nearPD(pc, W = None, epsilon = 1e-9, maxIter=100,tol = 1e-9):
+    n = pc.shape[0]
+    W = np.identity(n) 
+# W is the matrix used for the norm (assumed to be Identity matrix here)
+# the algorithm should work for any diagonal W
+    deltaS = 0
+    Yk = pc.copy()
+    i = 1
+    while(i <= maxIter):
+        Rk = Yk - deltaS
+        Xk = _getPs(Rk, W=W)
+        deltaS = Xk - Rk
+        Yk = _getPu(Xk, W=W)
+        norm = wgtNorm(Yk-pc,W)
+        minEigval = np.min(np.linalg.eig(Yk)[0])
+        
+        if minEigval > -epsilon:
+            break
+        i += 1
+        
+    if i < maxIter:
+        print("Converged in %d iterations." % i)
+    else:
+        print("Convergence failed after %d iterations." %(i-1))
+        
+    return Yk
+
+n = 500
+sigma = np.zeros(500*500)
+sigma = sigma.reshape(500,500)
+sigma.fill(0.9)
+
+for i in range(n):
+    sigma[i,i] = 1.0
+sigma[0,1] = 0.7357
+sigma[1,0] = 0.7357
+
+W = np.identity(n)
+
+starttime = time.time()
+hpsd = higham_nearPD(sigma)
+endtime = time.time()
+higham_times = endtime-starttime
+
+starttime = time.time()
+npsd = near_psd(sigma)
+endtime = time.time()
+near_times = endtime-starttime
+
+npsd = near_psd(sigma)
+norm_hpsd = wgtNorm(hpsd-sigma,W)
+norm_npsd = wgtNorm(npsd-sigma,W)
+print("Distance near_psd() = %.2f " % norm_npsd)
+print("Distance higham_nearPSD() = %.2f" % norm_hpsd)
+
+
+print("n=500")
+print("Higham Took: %.2f seconds" % higham_times)
+print("Near_PSD Took: %.2f seconds" % near_times)
+
+#Do it again but with a bigger matrix
+print("n = 1000")
+n = 1000
+sigma = np.zeros(1000*1000)
+sigma = sigma.reshape(1000,1000)
+sigma.fill(0.9)
+
+for i in range(n):
+    sigma[i,i] = 1.0
+sigma[0,1] = 0.7357
+sigma[1,0] = 0.7357
+
+W = np.identity(n)
+starttime = time.time()
+hpsd = higham_nearPD(sigma)
+endtime = time.time()
+higham_times = endtime-starttime
+
+starttime = time.time()
+npsd = near_psd(sigma)
+endtime = time.time()
+near_times = endtime-starttime
+
+print("Higham Took: %.2f seconds" % higham_times)
+print("Near_PSD Took: %.2f seconds" % near_times)
